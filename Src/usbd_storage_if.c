@@ -68,6 +68,17 @@
 #define STORAGE_BLK_SIZ                  0x200
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
+#ifdef STORAGE_BLK_SIZ
+#undef STORAGE_BLK_SIZ
+#endif
+#define STORAGE_BLK_SIZ                  512
+
+#ifdef STORAGE_BLK_NBR
+#undef STORAGE_BLK_NBR
+#endif
+#define STORAGE_CAPPACITY                1024*110
+#define STORAGE_BLK_NBR                  STORAGE_CAPPACITY / STORAGE_BLK_SIZ
+#define MEDIA_DESCRIPTOR                 0xf8
 
 /* USER CODE END PRIVATE_DEFINES */
 
@@ -81,6 +92,65 @@
   */
 
 /* USER CODE BEGIN PRIVATE_MACRO */
+uint8_t RamDisk[STORAGE_BLK_NBR * STORAGE_BLK_SIZ];
+
+void STORAGE_FileSystem_Init (void);
+
+const struct __attribute__ ((packed)) BPB_STRUCTURE
+		{
+	uint8_t   BS_jmpBoot[3] ;
+	int8_t    BS_OEMName[8] ;
+	uint16_t  BPB_BytsPerSec;
+	uint8_t   BPB_SecPerClus;
+	uint16_t  BPB_RsvdSecCnt;
+	uint8_t   BPB_NumFATs;
+	uint16_t  BPB_RootEntCnt;
+	uint16_t  BPB_TotSec16;
+	uint8_t   BPB_Media;
+	uint16_t  BPB_FATSz16;
+	uint16_t  BPB_SecPerTrk;
+	uint16_t  BPB_NumHeads;
+	uint32_t  BPB_HiddSec;
+	uint32_t  BPB_TotSec32;
+	uint8_t   BS_DrvNum;
+	uint8_t   BS_Reserved1;
+	uint8_t   BS_BootSig;
+	uint32_t  BS_VolID;
+	int8_t    BS_VolLab[11];
+	int8_t    BS_FilSysType[8];
+		} BIOS_Parameter_Block  = { \
+				.BS_jmpBoot = {0xeb,0xfe,0x90}, \
+				.BS_OEMName = {'M', 'S', 'D', 'O', 'S', '5', '.', '0'}, \
+				.BPB_BytsPerSec = STORAGE_BLK_SIZ, \
+				.BPB_SecPerClus = 1, \
+				.BPB_RsvdSecCnt = 1, \
+				.BPB_NumFATs = 1, \
+				.BPB_RootEntCnt = STORAGE_BLK_SIZ / 0x20, \
+				.BPB_TotSec16 = STORAGE_BLK_NBR, \
+				.BPB_Media = MEDIA_DESCRIPTOR, \
+				.BPB_FATSz16 = 1, \
+				.BPB_SecPerTrk = 0x3f, \
+				.BPB_NumHeads = 0xff, \
+				.BPB_HiddSec = 0, \
+				.BPB_TotSec32 = 0, \
+				.BS_DrvNum = 0x80, \
+				.BS_Reserved1 = 0, \
+				.BS_BootSig = 0x29, \
+				.BS_VolID = 0xcafecafe, \
+				.BS_VolLab = {'S', 'T', 'M', '_', 'R', 'A', 'M', 'D', 'I', 'S', 'K'}, \
+				.BS_FilSysType = {'F', 'A', 'T', '1', '2', ' ', ' ', ' '}, \
+		};
+
+const uint8_t Text_File_Data[] = {"STM32 CubeMX Mass Storage Device Ram Disk - done by wegi\r\n"};
+
+const uint8_t FAT_TABLE[] = {MEDIA_DESCRIPTOR, 0xff,0xff,0xff,0x0f};
+const uint8_t File_Name[] = {'T', 'E', 'X', 'T', 'F', 'I', 'L', 'E', 'T', 'X', 'T', \
+		0x20, \
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+		0x02, 0x00, \
+		sizeof(Text_File_Data), \
+};
 
 /* USER CODE END PRIVATE_MACRO */
 
@@ -229,9 +299,11 @@ int8_t STORAGE_IsWriteProtected_FS(uint8_t lun)
   */
 int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
-  /* USER CODE BEGIN 6 */
-  return (USBD_OK);
-  /* USER CODE END 6 */
+	/* USER CODE BEGIN 6 */
+	USBD_memcpy(buf, (void *)(RamDisk + (STORAGE_BLK_SIZ * blk_addr)), (STORAGE_BLK_SIZ * blk_len));
+	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+	return (USBD_OK);
+	/* USER CODE END 6 */
 }
 
 /**
@@ -241,9 +313,11 @@ int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
   */
 int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t blk_len)
 {
-  /* USER CODE BEGIN 7 */
-  return (USBD_OK);
-  /* USER CODE END 7 */
+	/* USER CODE BEGIN 7 */
+	memcpy((void *)(RamDisk + (STORAGE_BLK_SIZ * blk_addr)), buf, (STORAGE_BLK_SIZ * blk_len));
+	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+	return (USBD_OK);
+	/* USER CODE END 7 */
 }
 
 /**
@@ -259,7 +333,28 @@ int8_t STORAGE_GetMaxLun_FS(void)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+void STORAGE_FileSystem_Init (void)
+{
 
+    /*----------- FORMAT BOOT SECTOR -----------------*/
+	memset(RamDisk, 0, sizeof RamDisk);
+	memcpy((void *)(RamDisk), &BIOS_Parameter_Block , sizeof(BIOS_Parameter_Block));
+	RamDisk[0x1fe] = 0x55;
+	RamDisk[0x1ff] = 0xAA;
+//---
+    /*----------- FORMAT FAT TABLE -----------------*/
+	memcpy((void *)(RamDisk + (STORAGE_BLK_SIZ * 1) ), &FAT_TABLE , (sizeof(FAT_TABLE)));
+//---
+    /*----------- FORMAT DIR ENTRIES AND DISK NAME  -----------------*/
+    memcpy((void *)(RamDisk + (STORAGE_BLK_SIZ * 2) ), &BIOS_Parameter_Block.BS_VolLab , (sizeof(BIOS_Parameter_Block.BS_VolLab)));
+    RamDisk[(STORAGE_BLK_SIZ * 2) + 11] = 0x08; //disk name attribute
+    memcpy((void *)(RamDisk + 32 + (STORAGE_BLK_SIZ * 2) ), &File_Name , (sizeof(File_Name)));
+//---
+    /*----------- COPY ONE OF TEXTFILE  -----------------*/
+    memcpy((void *)(RamDisk + (STORAGE_BLK_SIZ * 3) ), &Text_File_Data , (sizeof(Text_File_Data)));
+
+//---
+}
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
